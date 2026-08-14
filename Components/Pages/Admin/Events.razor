@@ -1,0 +1,59 @@
+@page "/admin/events"
+@attribute [Authorize]
+@layout AdminLayout
+@inject EventService Even
+
+<PageTitle>Events</PageTitle>
+
+<div class="page">
+    <div class="page-head">
+        <div>
+            <h1>Events</h1>
+            <p>Manage active, scheduled and completed attendance tracker check-ins.</p>
+        </div>
+        <div class="page-actions">
+            <a class="btn btn-primary" href="/admin/events/new">+ New Event</a>
+        </div>
+    </div>
+
+    <div class="table-card">
+        <table>
+            <thead>
+                <tr>
+                    <th>Event name</th>
+                    <th>Location</th>
+                    <th>Starts</th>
+                    <th>Ends</th>
+                    <th>Status</th>
+                    <th class="right">Action</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var ev in _events)
+                {
+                    <tr>
+                        <td>@ev.Name</td>
+                        <td>@(ev.Location ?? "—")</td>
+                        <td>@Ui.DateTimeLabel(ev.StartsAt)</td>
+                        <td>@Ui.DateTimeLabel(ev.EndsAt)</td>
+                        <td><span class="pill @Ui.StatusClass(ev.Status)">@Ui.StatusLabel(ev.Status)</span></td>
+                        <td class="right">
+                            <a class="link-action" href="/admin/events/@ev.Id">View →</a>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+
+        @if (_events.Count == 0)
+        {
+            <p class="empty">No events yet. Create one to generate a check-in QR code.</p>
+        }
+    </div>
+</div>
+
+@code {
+    private List<EventListItem> _events = [];
+
+    protected override async Task OnInitializedAsync() => _events = await Even.GetEventsAsync();
+}

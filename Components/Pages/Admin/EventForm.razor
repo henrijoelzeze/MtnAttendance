@@ -1,0 +1,156 @@
+@page "/admin/events/new"
+@page "/admin/events/{Id:int}/edit"
+@attribute [Authorize]
+@layout AdminLayout
+@rendermode InteractiveServer
+@using System.ComponentModel.DataAnnotations
+@inject EventService Events
+@inject NavigationManager Nav
+@inject AuthenticationStateProvider AuthState
+@* Page interactive (circuit SignalR) : la soumission ne passe pas par un POST HTTP.
+   Input est donc un simple champ d'état de composant - pas de [SupplyParameterFromForm]
+   ni de FormName, qui ne servent qu'en rendu SSR statique. *@
+
+<PageTitle>@(IsEdit ? "Edit event" : "Create new event")</PageTitle>
+
+<div class="page page-narrow">
+    <div class="card">
+        <h1 style="font-size:1.9rem;font-weight:800">@(IsEdit ? "Edit Event" : "Create New Event")</h1>
+        <p style="color:var(--muted);margin:.5rem 0 2rem">
+            @(IsEdit ? "Changes apply immediately to the live check-in page." : "Generate a secure QR code for physical check-in.")
+        </p>
+
+        <EditForm Model="Input" OnValidSubmit="SaveAsync">
+            <DataAnnotationsValidator />
+
+            <label class="field upper">
+                <span>Event name *</span>
+                <InputText @bind-Value="Input.Name" />
+            </label>
+            <ValidationMessage For="() => Input.Name" />
+
+            <label class="field upper">
+                <span>Location (optional)</span>
+                <InputText @bind-Value="Input.Location" />
+            </label>
+
+            <div class="field-row">
+                <label class="field upper">
+                    <span>Starts at *</span>
+                    <InputDate Type="InputDateType.DateTimeLocal" @bind-Value="Input.StartsAt" />
+                </label>
+                <label class="field upper">
+                    <span>Ends at *</span>
+                    <InputDate Type="InputDateType.DateTimeLocal" @bind-Value="Input.EndsAt" />
+                </label>
+            </div>
+            <ValidationMessage For="() => Input.EndsAt" />
+
+            <label class="field upper">
+                <span>Quorum threshold % (optional)</span>
+                <InputNumber @bind-Value="Input.QuorumPercent" placeholder="e.g. 50" />
+            </label>
+
+            @if (IsEdit)
+            {
+                <label style="display:flex;gap:.6rem;align-items:center;margin:0 0 1.5rem;font-weight:600">
+                    <InputCheckbox @bind-Value="Input.IsManuallyClosed" style="width:auto" />
+                    Close check-ins now (overrides the end time)
+                </label>
+            }
+
+            @if (_error is not null)
+            {
+                <p class="form-error">@_error</p>
+            }
+
+            <button type="submit" class="btn btn-primary btn-block" disabled="@_saving">
+                @(IsEdit ? "Save changes" : "Create Event & Generate QR")
+            </button>
+        </EditForm>
+    </div>
+</div>
+
+@code {
+    [Parameter] public int? Id { get; set; }
+
+    private EventInput Input { get; set; } = new();
+
+    private bool IsEdit => Id is not null;
+    private bool _saving;
+    private string? _error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (Id is null)
+        {
+            var start = DateTime.Now.Date.AddHours(9);
+            Input.StartsAt = start;
+            Input.EndsAt = start.AddHours(3);
+            return;
+        }
+
+        var ev = await Events.GetAsync(Id.Value);
+        if (ev is null) { Nav.NavigateTo("/admin/events"); return; }
+
+        Input = new EventInput
+        {
+            Name = ev.Name,
+            Location = ev.Location,
+            StartsAt = ev.StartsAt,
+            EndsAt = ev.EndsAt,
+            QuorumPercent = ev.QuorumPercent,
+            IsManuallyClosed = ev.IsManuallyClosed
+        };
+    }
+
+    private async Task SaveAsync()
+    {
+        _error = null;
+
+        if (Input.EndsAt <= Input.StartsAt)
+        {
+            _error = "The end time must come after the start time.";
+            return;
+        }
+
+        var draft = new EventDraft(Input.Name, Input.Location, Input.StartsAt, Input.EndsAt, Input.QuorumPercent);
+
+        _saving = true;
+        try
+        {
+            if (IsEdit)
+            {
+                await Events.UpdateAsync(Id!.Value, draft, Input.IsManuallyClosed);
+                Nav.NavigateTo($"/admin/events/{Id}");
+            }
+            else
+            {
+                var state = await AuthState.GetAuthenticationStateAsync();
+                var ev = await Events.CreateAsync(draft, state.User.EmployeeId());
+                Nav.NavigateTo($"/admin/events/{ev.Id}");
+            }
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    public class EventInput
+    {
+        [Required(ErrorMessage = "Give the event a name.")]
+        public string Name { get; set; } = string.Empty;
+
+        public string? Location { get; set; }
+
+        public DateTime StartsAt { get; set; } = DateTime.Now;
+
+        public DateTime EndsAt { get; set; } = DateTime.Now.AddHours(3);
+
+        [Range(1, 100, ErrorMessage = "Use a value between 1 and 100.")]
+        public double? QuorumPercent { get; set; }
+
+        public bool IsManuallyClosed { get; set; }
+    }
+}

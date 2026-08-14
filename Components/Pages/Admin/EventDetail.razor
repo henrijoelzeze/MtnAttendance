@@ -1,0 +1,110 @@
+@page "/admin/events/{Id:int}"
+@attribute [Authorize]
+@layout AdminLayout
+@inject EventService Events
+@inject NavigationManager Nav
+
+<PageTitle>@(_dashboard?.Event.Name ?? "Event")</PageTitle>
+
+@if (_dashboard is null)
+{
+    <div class="page"><p class="empty">This event no longer exists.</p></div>
+}
+else
+{
+    <div class="page">
+        <div class="page-head">
+            <div>
+                <div class="title-row">
+                    <h1>@_dashboard.Event.Name</h1>
+                    <span class="pill @Ui.StatusClass(_dashboard.Status)">@Ui.StatusLabel(_dashboard.Status)</span>
+                </div>
+                <div class="meta">
+                    @if (_dashboard.Event.Location is { Length: > 0 } place)
+                    {
+                        <span>@place</span>
+                        <span>•</span>
+                    }
+                    <span>@Ui.DateTimeLabel(_dashboard.Event.StartsAt) – @_dashboard.Event.EndsAt.ToString("HH:mm")</span>
+                </div>
+            </div>
+            <div class="page-actions">
+                <a class="btn btn-quiet" href="/admin/events/@Id/edit">Edit Event</a>
+                <a class="btn btn-outline" style="background:var(--ink);color:#fff"
+                   href="/admin/events/@Id/attendees.csv">Export Attendees (.csv)</a>
+            </div>
+        </div>
+
+        <div class="grid-dashboard">
+            <div class="card">
+                <h2>Check-in QR Code</h2>
+                <img class="qr-img" alt="Check-in QR code" src="@EventService.QrDataUri(_dashboard.CheckInUrl)" />
+                <p class="qr-url">@_dashboard.CheckInUrl</p>
+                <a class="btn btn-primary btn-block" href="/admin/events/@Id/qr.png">Download QR</a>
+            </div>
+
+            <div class="card">
+                <h2>Overall Attendance</h2>
+                <p class="stat-number">
+                    @_dashboard.TotalPresent <small>/ @_dashboard.TotalHeadcount</small>
+                </p>
+                <p class="stat-label">Employees checked in</p>
+
+                <p class="stat-rate">@Ui.Percent(_dashboard.TotalRate, 1)</p>
+                <div class="bar"><i style="width:@Width(_dashboard.TotalRate)"></i></div>
+
+                @if (_dashboard.Event.QuorumPercent is { } quorum)
+                {
+                    <p class="threshold">Required threshold: @quorum.ToString("0.#")%</p>
+                }
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>By Subdivision</h2>
+            <table class="plain">
+                <thead>
+                    <tr>
+                        <th>Subdivision</th>
+                        <th>Present</th>
+                        <th>Total</th>
+                        <th>Attendance rate</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var dept in _dashboard.ByDepartment)
+                    {
+                        <tr>
+                            <td>@dept.Department</td>
+                            <td style="color:var(--ink);font-weight:600">@dept.Present</td>
+                            <td>@dept.Headcount</td>
+                            <td>
+                                <div style="display:flex;align-items:center;gap:1rem">
+                                    <div class="bar" style="width:200px"><i style="width:@Width(dept.Rate)"></i></div>
+                                    <b style="color:var(--ink)">@Ui.Percent(dept.Rate)</b>
+                                </div>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+
+            @if (_dashboard.ByDepartment.Count == 0)
+            {
+                <p class="empty">No active employees on file. Import the roster first.</p>
+            }
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public int Id { get; set; }
+
+    private EventDashboard? _dashboard;
+
+    protected override async Task OnParametersSetAsync()
+        => _dashboard = await Events.GetDashboardAsync(Id, Nav.BaseUri);
+
+    private static string Width(double rate) =>
+        (Math.Clamp(rate, 0, 1) * 100).ToString("F2", System.Globalization.CultureInfo.InvariantCulture) + "%";
+}

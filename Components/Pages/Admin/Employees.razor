@@ -1,0 +1,145 @@
+@page "/admin/employees"
+@attribute [Authorize]
+@layout AdminLayout
+@rendermode InteractiveServer
+@inject EmployeeImportService Import
+@inject AuthenticationStateProvider AuthState
+
+<PageTitle>Employee Directory Sync</PageTitle>
+
+<div class="page">
+    <div class="page-head">
+        <div>
+            <h1>Employee Directory Sync</h1>
+            <p>Update base roster and headcount parameters across Côte d'Ivoire offices.</p>
+        </div>
+    </div>
+
+    <div class="grid-import">
+        <div class="card">
+            <h2>Import Employee Data</h2>
+            <p style="color:var(--muted);margin:0 0 1.5rem;line-height:1.55">
+                Upload the HR Excel roster to refresh subdivisions, person numbers and back-office access.
+                Rows with a missing person number, name or subdivision are skipped and listed as warnings.
+            </p>
+
+            <div class="dropzone">
+                @if (_busy)
+                {
+                    <strong>Importing…</strong>
+                    <span>Large rosters can take a few seconds.</span>
+                }
+                else
+                {
+                    <strong>Select the Excel file</strong>
+                    <span>Accepts .xlsx up to 10 MB</span>
+                    <InputFile OnChange="OnFileAsync" accept=".xlsx" disabled="@_busy" />
+                }
+            </div>
+
+            @if (_report is not null)
+            {
+                <div style="margin-top:1.75rem">
+                    @if (_report.Failed)
+                    {
+                        <p class="form-error">@_report.Error</p>
+                    }
+                    else
+                    {
+                        <p style="font-weight:700;margin:0 0 .75rem">Import complete</p>
+                        <div class="sync-line"><span>Rows read</span><b>@_report.RowsRead</b></div>
+                        <div class="sync-line"><span>Inserted (new hires)</span><b>@_report.Inserted</b></div>
+                        <div class="sync-line"><span>Updated profiles</span><b>@_report.Updated</b></div>
+                        <div class="sync-line"><span>Deactivated employees</span><b>@_report.Deactivated</b></div>
+                        <div class="sync-line"><span>HR accounts disabled</span><b>@_report.HrAccountsAutoDisabled</b></div>
+
+                        @if (_report.Warnings.Count > 0)
+                        {
+                            <ul class="warnings">
+                                @foreach (var warning in _report.Warnings.Take(20))
+                                {
+                                    <li>@warning</li>
+                                }
+                            </ul>
+                            @if (_report.Warnings.Count > 20)
+                            {
+                                <p class="warnings" style="list-style:none">
+                                    …and @(_report.Warnings.Count - 20) more skipped rows.
+                                </p>
+                            }
+                        }
+                    }
+                </div>
+            }
+        </div>
+
+        <div class="stack">
+            <div class="card">
+                <h2>Last Sync Results@(_lastRun is null ? "" : $" ({Ui.DateTimeLabel(_lastRun.RunAt)})")</h2>
+                @if (_lastRun is null)
+                {
+                    <p style="color:var(--muted);margin:0">No roster has been imported yet.</p>
+                }
+                else
+                {
+                    <div class="sync-line"><span>Rows read</span><b>@_lastRun.RowsRead</b></div>
+                    <div class="sync-line"><span>Inserted (new hires)</span><b>@_lastRun.Inserted</b></div>
+                    <div class="sync-line"><span>Updated profiles</span><b>@_lastRun.Updated</b></div>
+                    <div class="sync-line"><span>Deactivated accounts</span><b>@_lastRun.Deactivated</b></div>
+                    <div class="sync-line"><span>HR accounts disabled</span><b>@_lastRun.HrAccountsDisabled</b></div>
+                }
+            </div>
+
+            <div class="card brand">
+                <div class="headcount-label">Current headcount</div>
+                <div class="headcount">@_headcount Active Employees</div>
+                <div>Roster verified across all CIV regional branches.</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    private ImportReport? _report;
+    private ImportRun? _lastRun;
+    private int _headcount;
+    private bool _busy;
+
+    protected override async Task OnInitializedAsync() => await RefreshAsync();
+
+    private async Task RefreshAsync()
+    {
+        _lastRun = await Import.GetLastRunAsync();
+        _headcount = await Import.GetActiveHeadcountAsync();
+    }
+
+    private async Task OnFileAsync(InputFileChangeEventArgs e)
+    {
+        _busy = true;
+        _report = null;
+
+        try
+        {
+            var state = await AuthState.GetAuthenticationStateAsync();
+
+            // Copie mémoire : ClosedXML a besoin d'un flux seekable.
+            using var buffer = new MemoryStream();
+            await using (var upload = e.File.OpenReadStream(maxAllowedSize: 10 * 1024 * 1024))
+            {
+                await upload.CopyToAsync(buffer);
+            }
+            buffer.Position = 0;
+
+            _report = await Import.ImportAsync(buffer, state.User.EmployeeId());
+            await RefreshAsync();
+        }
+        catch (Exception ex)
+        {
+            _report = new ImportReport { Failed = true, Error = ex.Message };
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

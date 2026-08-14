@@ -1,0 +1,36 @@
+@inherits LayoutComponentBase
+
+<header class="topbar">
+    <div class="brand">
+        <span class="logo">MTN</span>
+        <span>CIV ATTENDANCE ADMIN</span>
+    </div>
+
+    <nav>
+        <NavLink href="/admin/events" ActiveClass="active">Events</NavLink>
+        <NavLink href="/admin/employees" ActiveClass="active">Employees</NavLink>
+        <NavLink href="/admin/hr-accounts" ActiveClass="active">HR Accounts</NavLink>
+    </nav>
+
+    <div class="session">
+        <span class="dot"></span>
+        <AuthorizeView>
+            <span>@ShortName(context.User.Identity?.Name) (HR)</span>
+        </AuthorizeView>
+        <a href="/admin/logout">Log out</a>
+    </div>
+</header>
+
+<main>
+    @Body
+</main>
+
+@code {
+    // « Kouame Kouassi » -> « K. Kouassi », comme dans les maquettes.
+    private static string ShortName(string? fullName)
+    {
+        if (string.IsNullOrWhiteSpace(fullName)) return "HR";
+        var parts = fullName.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return parts.Length < 2 ? fullName : $"{parts[0][0]}. {parts[^1]}";
+    }
+}

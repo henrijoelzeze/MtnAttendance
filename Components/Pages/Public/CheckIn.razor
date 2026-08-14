@@ -1,0 +1,106 @@
+@page "/c/{QrToken}"
+@using System.ComponentModel.DataAnnotations
+@inject CheckInService Check
+@* SSR statique volontairement : aucun circuit SignalR ouvert par employé lors d'un pic de scans,
+   et le formulaire reste fonctionnel même si le Wi-Fi de la salle est instable. *@
+
+<PageTitle>Check in</PageTitle>
+
+<div class="mobile-card">
+    @if (_event is null)
+    {
+        <div class="state">
+            <div class="icon plain">@Icons.Lock</div>
+            <p>This check-in link is not valid. Ask HR for the current QR code.</p>
+        </div>
+    }
+    else if (_result is { Outcome: CheckInOutcome.Success })
+    {
+        <div class="state">
+            <div class="icon ok">@Icons.Check</div>
+            <h2 class="ok">Welcome, @_result.FirstName</h2>
+            <p>You're marked present for <b>@_event.Name</b>.</p>
+            <a class="btn btn-outline btn-block" href="/c/@QrToken">Done</a>
+        </div>
+    }
+    else if (_result is { Outcome: CheckInOutcome.AlreadyCheckedIn })
+    {
+        <div class="state">
+            <div class="icon warn">@Icons.Clock</div>
+            <h2>Already checked in</h2>
+            <p>Welcome back, @_result.FirstName. You were already marked present for <b>@_event.Name</b>.</p>
+            <a class="btn btn-outline btn-block" href="/c/@QrToken">Dismiss</a>
+        </div>
+    }
+    else if (_result is { Outcome: CheckInOutcome.UnknownPerson })
+    {
+        <div class="state">
+            <div class="icon bad">@Icons.Warning</div>
+            <h2 class="bad">Number not recognized</h2>
+            <p>We couldn't find that Person Number. Please check it and try again, or see HR.</p>
+            <a class="btn btn-outline btn-block" href="/c/@QrToken">Try Again</a>
+        </div>
+    }
+    else if (_event.Status != EventStatus.Open)
+    {
+        <div class="state">
+            <div class="icon plain">@Icons.Lock</div>
+            <p>
+                @(_event.Status == EventStatus.Scheduled
+                    ? "This event is not accepting check-ins yet."
+                    : "This event is no longer accepting check-ins.")
+            </p>
+        </div>
+    }
+    else
+    {
+        <h1>@_event.Name</h1>
+        @if (_event.Location is { Length: > 0 } place)
+        {
+            <div class="place">@Icons.Pin <span>@place</span></div>
+        }
+
+        <EditForm Model="Input" FormName="checkin" OnValidSubmit="SubmitAsync">
+            <DataAnnotationsValidator />
+
+            <label class="field">
+                <span>Enter your Person Number</span>
+                <InputText @bind-Value="Input.PersonNumber" autocomplete="off"
+                           inputmode="numeric" autofocus placeholder="e.g. 643017" />
+            </label>
+            <ValidationMessage For="() => Input.PersonNumber" />
+
+            <button type="submit" class="btn btn-primary btn-block">Check In</button>
+        </EditForm>
+    }
+</div>
+
+@code {
+    [Parameter] public string QrToken { get; set; } = default!;
+    [CascadingParameter] public HttpContext? HttpContext { get; set; }
+    [SupplyParameterFromForm]
+    private CheckInInput Input { get; set; } = null!;
+
+    private CheckInEventInfo? _event;
+    private CheckInResult? _result;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Input ??= new CheckInInput();
+        _event = await Check.GetEventAsync(QrToken);
+    }
+
+    private async Task SubmitAsync()
+    {
+        var ip = HttpContext?.Connection.RemoteIpAddress?.ToString();
+        _result = await Check.CheckInAsync(QrToken, Input.PersonNumber, ip);
+        Input = new();
+        _event = await Check.GetEventAsync(QrToken);
+    }
+
+    public class CheckInInput
+    {
+        [Required(ErrorMessage = "Enter your Person Number.")]
+        public string PersonNumber { get; set; } = string.Empty;
+    }
+}
