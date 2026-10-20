@@ -31,12 +31,6 @@ services:
     ports:
       # Binds only to server loopback. The public HTTPS proxy must connect accordingly.
       - "127.0.0.1:${ATTENDANCE_PORT:-18080}:8080"
-    healthcheck:
-      test: ["CMD","dotnet","--info"]
-      interval: 60s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
     security_opt:
       - no-new-privileges:true
 
