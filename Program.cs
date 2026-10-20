@@ -1,3 +1,6 @@
+using System.Net;
+using Microsoft.AspNetCore.HttpOverrides;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Authentication;
 using System.Text.RegularExpressions;
 using System.Threading.RateLimiting;
@@ -21,6 +24,31 @@ builder.Services.AddRadzenComponents();
 builder.Services.AddDbContextFactory<AppDbContext>(options =>
     options.UseNpgsql(
         builder.Configuration.GetConnectionString("Default")));
+
+// Fail early if a deployment forgets its external PostgreSQL connection.
+if (string.IsNullOrWhiteSpace(builder.Configuration.GetConnectionString("Default")) &&
+    !builder.Environment.IsDevelopment())
+    throw new InvalidOperationException("ConnectionStrings__Default must be configured securely.");
+
+// Komodo/Docker: keep the cookie key ring across container restarts.
+var keysPath = builder.Configuration["DataProtection:KeysPath"];
+if (!string.IsNullOrWhiteSpace(keysPath))
+    builder.Services.AddDataProtection()
+        .SetApplicationName("MtnAttendance")
+        .PersistKeysToFileSystem(new DirectoryInfo(keysPath));
+
+// Never trust arbitrary internet-supplied X-Forwarded-* headers.
+builder.Services.Configure<ForwardedHeadersOptions>(options =>
+{
+    options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+    foreach (var raw in (builder.Configuration["ReverseProxy:KnownProxies"] ?? "")
+        .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+    {
+        if (!IPAddress.TryParse(raw, out var address))
+            throw new InvalidOperationException("ReverseProxy__KnownProxies must contain IP addresses.");
+        options.KnownProxies.Add(address);
+    }
+});
 
 builder.Services.AddSingleton(TimeProvider.System);
 
@@ -73,7 +101,7 @@ builder.Services.AddRateLimiter(options =>
         var ip = context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
         return RateLimitPartition.GetFixedWindowLimiter(ip, _ => new FixedWindowRateLimiterOptions
         {
-            PermitLimit = 5, Window = TimeSpan.FromMinutes(1), QueueLimit = 0, AutoReplenishment = true
+            PermitLimit = 20, Window = TimeSpan.FromMinutes(1), QueueLimit = 0, AutoReplenishment = true
         });
     });
     options.OnRejected = (context, _) =>
@@ -92,8 +120,11 @@ if (!app.Environment.IsDevelopment())
     app.UseHsts();
 }
 
-app.UseHttpsRedirection();
+app.UseForwardedHeaders();
+if (!builder.Configuration.GetValue<bool>("ReverseProxy:TlsTerminated"))
+    app.UseHttpsRedirection();
 app.MapStaticAssets();
+app.MapGet("/healthz", () => Results.Ok(new { status = "alive" })).AllowAnonymous();
 app.UseRateLimiter();
 app.UseAuthentication();
 app.UseAuthorization();
@@ -119,12 +150,6 @@ app.MapGet("/admin/events/{id:int}/attendees.csv", async (int id, EventService e
     return file is null ? Results.NotFound() : Results.File(file.Value.Content, "text/csv", file.Value.FileName);
 }).RequireAuthorization();
 
-// GET assumé : le bandeau est rendu en interactif, où <AntiforgeryToken /> n'a pas de HttpContext.
-// Le seul risque est une déconnexion forcée par CSRF — sans perte de données.
-app.MapGet("/admin/logout", async (HttpContext http) =>
-{
-    await http.SignOutAsync(HrAuth.Scheme);
-    return Results.Redirect("/admin/login");
-});
+// Sign-out uses a CSRF-protected static SSR POST page (Components/Pages/Auth/Logout.razor).
 
 await app.RunAsync();
