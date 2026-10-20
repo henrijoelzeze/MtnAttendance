@@ -1,5 +1,10 @@
+using System.Net;
+using Microsoft.AspNetCore.HttpOverrides;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Authentication;
-using Microsoft.AspNetCore.Identity;
+using Microsoft.AspNetCore.Antiforgery;
+using System.Text.RegularExpressions;
+using System.Threading.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.FluentUI.AspNetCore.Components;
 using MtnAttendance.Components;
@@ -21,10 +26,44 @@ builder.Services.AddDbContextFactory<AppDbContext>(options =>
     options.UseNpgsql(
         builder.Configuration.GetConnectionString("Default")));
 
+// Fail early if a deployment forgets its external PostgreSQL connection.
+if (string.IsNullOrWhiteSpace(builder.Configuration.GetConnectionString("Default")) &&
+    !builder.Environment.IsDevelopment())
+    throw new InvalidOperationException("ConnectionStrings__Default must be configured securely.");
+
+// Komodo/Docker: keep the cookie key ring across container restarts.
+var keysPath = builder.Configuration["DataProtection:KeysPath"];
+if (!string.IsNullOrWhiteSpace(keysPath))
+    builder.Services.AddDataProtection()
+        .SetApplicationName("MtnAttendance")
+        .PersistKeysToFileSystem(new DirectoryInfo(keysPath));
+
+// Never trust arbitrary internet-supplied X-Forwarded-* headers.
+builder.Services.Configure<ForwardedHeadersOptions>(options =>
+{
+    options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+    foreach (var raw in (builder.Configuration["ReverseProxy:KnownProxies"] ?? "")
+        .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+    {
+        if (!IPAddress.TryParse(raw, out var address))
+            throw new InvalidOperationException("ReverseProxy__KnownProxies must contain IP addresses.");
+        options.KnownProxies.Add(address);
+    }
+});
+
 builder.Services.AddSingleton(TimeProvider.System);
-builder.Services.AddSingleton<IPasswordHasher<HrAccount>, PasswordHasher<HrAccount>>();
+
 builder.Services.AddScoped<CheckInService>();
 builder.Services.AddScoped<HrAuthService>();
+builder.Services.AddScoped<IHrDirectoryAuthenticator, LdapsHrAuthenticator>();
+builder.Services.AddOptions<LdapsOptions>()
+    .Bind(builder.Configuration.GetSection(LdapsOptions.SectionName))
+    .Validate(o => !string.IsNullOrWhiteSpace(o.PrimaryHost) && o.Port is > 0 and <= 65535 &&
+        !string.IsNullOrWhiteSpace(o.UserSearchBase) && !string.IsNullOrWhiteSpace(o.BindUsername) &&
+        !string.IsNullOrWhiteSpace(o.BindPassword) &&
+        Regex.IsMatch(o.EmployeeNumberAttribute, "^[A-Za-z][A-Za-z0-9-]{0,63}$"),
+        "LDAPS configuration is incomplete. Set protected runtime environment variables.")
+    .ValidateOnStart();
 builder.Services.AddScoped<EmployeeImportService>();
 builder.Services.AddScoped<EventService>();
 
@@ -39,9 +78,39 @@ builder.Services.AddAuthentication(HrAuth.Scheme)
         o.AccessDeniedPath = "/admin/login";
         o.ExpireTimeSpan = TimeSpan.FromHours(8);
         o.SlidingExpiration = true;
+        o.Events.OnValidatePrincipal = async context =>
+        {
+            var auth = context.HttpContext.RequestServices.GetRequiredService<HrAuthService>();
+            if (!await auth.IsAllowedAsync(context.Principal.EmployeeId(), context.HttpContext.RequestAborted))
+            {
+                context.RejectPrincipal();
+                await context.HttpContext.SignOutAsync(HrAuth.Scheme);
+            }
+        };
     });
 
-builder.Services.AddAuthorization();
+builder.Services.AddAuthorization(options =>
+    options.DefaultPolicy = new Microsoft.AspNetCore.Authorization.AuthorizationPolicyBuilder(HrAuth.Scheme)
+        .RequireAuthenticatedUser().RequireRole("HR").Build());
+
+builder.Services.AddRateLimiter(options =>
+{
+    options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(context =>
+    {
+        if (!HttpMethods.IsPost(context.Request.Method) || context.Request.Path != "/admin/login")
+            return RateLimitPartition.GetNoLimiter("other");
+        var ip = context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+        return RateLimitPartition.GetFixedWindowLimiter(ip, _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = 20, Window = TimeSpan.FromMinutes(1), QueueLimit = 0, AutoReplenishment = true
+        });
+    });
+    options.OnRejected = (context, _) =>
+    {
+        context.HttpContext.Response.StatusCode = StatusCodes.Status429TooManyRequests;
+        return ValueTask.CompletedTask;
+    };
+});
 builder.Services.AddCascadingAuthenticationState();
 
 var app = builder.Build();
@@ -52,8 +121,12 @@ if (!app.Environment.IsDevelopment())
     app.UseHsts();
 }
 
-app.UseHttpsRedirection();
+app.UseForwardedHeaders();
+if (!builder.Configuration.GetValue<bool>("ReverseProxy:TlsTerminated"))
+    app.UseHttpsRedirection();
 app.MapStaticAssets();
+app.MapGet("/healthz", () => Results.Ok(new { status = "alive" })).AllowAnonymous();
+app.UseRateLimiter();
 app.UseAuthentication();
 app.UseAuthorization();
 app.UseAntiforgery();
@@ -78,12 +151,12 @@ app.MapGet("/admin/events/{id:int}/attendees.csv", async (int id, EventService e
     return file is null ? Results.NotFound() : Results.File(file.Value.Content, "text/csv", file.Value.FileName);
 }).RequireAuthorization();
 
-// GET assumé : le bandeau est rendu en interactif, où <AntiforgeryToken /> n'a pas de HttpContext.
-// Le seul risque est une déconnexion forcée par CSRF — sans perte de données.
-app.MapGet("/admin/logout", async (HttpContext http) =>
+// Logout requires a valid antiforgery token; GET only shows the confirmation page.
+app.MapPost("/admin/logout/confirm", async (HttpContext http, IAntiforgery antiforgery) =>
 {
+    await antiforgery.ValidateRequestAsync(http);
     await http.SignOutAsync(HrAuth.Scheme);
-    return Results.Redirect("/admin/login");
-});
+    return Results.LocalRedirect("/admin/login");
+}).RequireAuthorization();
 
 await app.RunAsync();

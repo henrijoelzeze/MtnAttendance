@@ -1,0 +1,22 @@
+name: Build and container validation
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches: [feature/hr-ldaps-authentication]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Restore
+        run: dotnet restore MtnAttendance.csproj
+      - name: Build
+        run: dotnet build MtnAttendance.csproj -c Release --no-restore
+      - name: Validate Dockerfile
+        run: docker build -t mtn-attendance:ci .

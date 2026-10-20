@@ -20,6 +20,7 @@
     <!-- PasswordHasher uniquement : pas d'ASP.NET Identity complet -->
     <PackageReference Include="ClosedXML" Version="0.104.2" />
     <PackageReference Include="QRCoder" Version="1.6.0" />
+    <PackageReference Include="System.DirectoryServices.Protocols" Version="10.0.0" />
   </ItemGroup>
 
   <ItemGroup>

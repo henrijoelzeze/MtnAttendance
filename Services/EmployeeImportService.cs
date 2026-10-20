@@ -145,6 +145,16 @@ public class EmployeeImportService(IDbContextFactory<AppDbContext> factory, Time
             SyncHrAccess(employee, now, report);
         }
 
+        // A partial or invalid roster must not silently revoke employee and HR access.
+        if (report.RowsRead == 0 || report.Warnings.Count > 0 ||
+            (existing.Count > 0 && seen.Count < Math.Ceiling(existing.Count * 0.8)))
+        {
+            report.Failed = true;
+            report.Error = "Import refused: empty, incomplete or invalid roster. No changes were saved.";
+            await tx.RollbackAsync(ct);
+            return;
+        }
+
         DeactivateMissing(existing, seen, report);
 
         db.ImportRuns.Add(BuildRun(runByEmployeeId, now, report));
@@ -280,7 +290,7 @@ public class EmployeeImportService(IDbContextFactory<AppDbContext> factory, Time
                 employee.HrAccount = new HrAccount { CreatedAt = now, IsEnabled = true };
                 report.HrAccountsCreated++;
             }
-            else if (!employee.HrAccount.IsEnabled && employee.HrAccount.HasPassword)
+            else if (!employee.HrAccount.IsEnabled)
             {
                 // Retour dans la subdivision RH : on réactive sans toucher au mot de passe.
                 employee.HrAccount.IsEnabled = true;

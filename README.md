@@ -1,3 +1,5 @@
+> **HR authentication:** HR accounts now authenticate against the corporate LDAPS directory. Configure protected secrets and read [deployment instructions](docs/hr-ldaps-authentication.md) before deploying. The QR-code check-in portal remains public.
+
 # MTN Attendance — noyau applicatif
 
 ## Ce qui est livré

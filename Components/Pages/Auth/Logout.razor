@@ -1,0 +1,14 @@
+@page "/admin/logout"
+@attribute [Authorize]
+
+<PageTitle>Sign out</PageTitle>
+<div class="mobile-card">
+    <h1>Sign out</h1>
+    <p>End your HR attendance session?</p>
+    <form method="post" action="/admin/logout/confirm">
+        <AntiforgeryToken />
+        <button class="btn btn-primary btn-block" type="submit">Sign out</button>
+    </form>
+    <a href="/admin/events" class="back-link">Cancel</a>
+</div>
+
