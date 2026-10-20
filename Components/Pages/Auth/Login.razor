@@ -3,236 +3,70 @@
 @using Microsoft.AspNetCore.Authentication
 @inject HrAuthService Auth
 @inject NavigationManager Nav
-@* SSR statique obligatoire : un seul formulaire nommé pour toute la page.
-   L'état (étape courante) est reporté dans un champ caché et RE-VÉRIFIÉ
-   côté serveur à chaque soumission - on ne fait jamais confiance à la valeur
-   du client pour la décision de sécurité, seulement pour l'affichage.
-   Step est stocké en string (pas en enum nullable) : le binding de formulaire
-   Blazor pour les enums nullable via un champ caché n'est pas fiable.
 
-   IMPORTANT : le champ caché ne transporte QUE EnterPassword / CreatePassword.
-   Les étapes de refus (Denied, NotHr, Disabled) restent côté serveur : si on les
-   reportait, la soumission suivante serait prise pour une étape mot de passe
-   alors que le formulaire affiché n'a pas de champ mot de passe. *@
-
-<PageTitle>HR sign in</PageTitle>
+<PageTitle>HR directory sign in</PageTitle>
 
 <div class="mobile-card">
-    @if (IsPasswordStep(_step))
+    <h1>MTN CIV Attendance</h1>
+    <p class="sub">Human Resources — corporate directory sign-in</p>
+    <div class="rule"></div>
+
+    @if (_error is not null)
     {
-        <h1>@(_step == LoginStep.CreatePassword ? "Set Credentials" : "Welcome back")</h1>
-        <p class="sub">
-            @(_step == LoginStep.CreatePassword ? "First login setup for " : "Signing in as ")<b>@Input.PersonNumber</b>
-        </p>
-    }
-    else if (_error is not null)
-    {
-        <div class="alert">@Icons.Warning <span>@_error</span></div>
-    }
-    else
-    {
-        <h1>MTN CIV Attendance</h1>
-        <div class="rule"></div>
+        <p class="form-error" role="alert">@_error</p>
     }
 
-    <EditForm Model="Input" FormName="auth" OnValidSubmit="SubmitAsync">
+    <EditForm Model="Input" FormName="hr-ldaps-login" OnValidSubmit="SubmitAsync">
         <DataAnnotationsValidator />
-        <input type="hidden" name="Input.Step" value="@Input.Step" />
-
-        @if (IsPasswordStep(_step))
-        {
-            <input type="hidden" name="Input.PersonNumber" value="@Input.PersonNumber" />
-
-            @if (_step == LoginStep.CreatePassword)
-            {
-                <label class="field">
-                    <span>New Password</span>
-                    <InputText type="password" @bind-Value="Input.Password"
-                               autocomplete="new-password" placeholder="At least 8 characters" />
-                </label>
-                <ValidationMessage For="() => Input.Password" />
-
-                <label class="field">
-                    <span>Confirm Password</span>
-                    <InputText type="password" @bind-Value="Input.ConfirmPassword"
-                               autocomplete="new-password" placeholder="Repeat password" />
-                </label>
-                <ValidationMessage For="() => Input.ConfirmPassword" />
-
-                <button type="submit" class="btn btn-primary btn-block">Create Account &amp; Log In</button>
-            }
-            else
-            {
-                <label class="field">
-                    <span>Password</span>
-                    <InputText type="password" @bind-Value="Input.Password" autocomplete="current-password" autofocus />
-                </label>
-                <ValidationMessage For="() => Input.Password" />
-
-                <button type="submit" class="btn btn-primary btn-block">Log In</button>
-            }
-        }
-        else
-        {
-            <label class="field">
-                <span>Person Number</span>
-                <InputText @bind-Value="Input.PersonNumber" inputmode="numeric"
-                           autocomplete="off" autofocus placeholder="Enter workspace ID" />
-            </label>
-            <ValidationMessage For="() => Input.PersonNumber" />
-
-            <button type="submit" class="btn btn-primary btn-block">Continue</button>
-        }
+        <label class="field">
+            <span>Person Number</span>
+            <InputText @bind-Value="Input.PersonNumber" autocomplete="username"
+                       inputmode="numeric" autofocus placeholder="Enter your employee number" />
+        </label>
+        <ValidationMessage For="() => Input.PersonNumber" />
+        <label class="field">
+            <span>Corporate directory password</span>
+            <InputText @bind-Value="Input.Password" type="password"
+                       autocomplete="current-password" />
+        </label>
+        <ValidationMessage For="() => Input.Password" />
+        <button type="submit" class="btn btn-primary btn-block">Sign in</button>
     </EditForm>
-
-    @if (_error is not null && IsPasswordStep(_step))
-    {
-        <p class="form-error" style="margin:1rem 0 0">@_error</p>
-    }
-
-    @if (IsPasswordStep(_step))
-    {
-        <a class="back-link" href="/admin/login">Back</a>
-    }
 </div>
 
 @code {
-    [CascadingParameter]
-    public HttpContext HttpContext { get; set; } = default!;
-
-    [SupplyParameterFromForm]
-    private LoginInput Input { get; set; } = default!;
-
-    private LoginStep? _step;
+    [CascadingParameter] public HttpContext HttpContext { get; set; } = default!;
+    [SupplyParameterFromForm] private LoginInput Input { get; set; } = default!;
     private string? _error;
 
-    /// <summary>Seules ces deux étapes affichent un champ mot de passe.</summary>
-    private static bool IsPasswordStep(LoginStep? step) =>
-        step is LoginStep.EnterPassword or LoginStep.CreatePassword;
-
-    protected override void OnInitialized()
-    {
-        // BL0008 : ne jamais initialiser une propriété [SupplyParameterFromForm]
-        // avec un initialiseur de propriété - le binding peut la remettre à null.
-        Input ??= new();
-
-        // Valeur postée non fiable : un TryParse défensif retombe sur l'étape 1
-        // (le pire cas possible) au lieu de planter si elle est absente/invalide.
-        _step = ParsePostedStep();
-    }
-
-    /// <summary>
-    /// Étape postée, réduite aux seules valeurs légitimes. Toute autre valeur
-    /// (absente, invalide, ou une étape de refus injectée à la main) vaut null,
-    /// c'est-à-dire « repartir de l'identification ».
-    /// </summary>
-    private LoginStep? ParsePostedStep()
-    {
-        if (!Enum.TryParse<LoginStep>(Input.Step, out var parsed)) return null;
-        return IsPasswordStep(parsed) ? parsed : null;
-    }
-
-    /// <summary>Le champ caché ne reçoit jamais autre chose qu'une étape mot de passe.</summary>
-    private void SyncPostedStep() =>
-        Input.Step = IsPasswordStep(_step) ? _step!.Value.ToString() : null;
+    protected override void OnInitialized() => Input ??= new LoginInput();
 
     private async Task SubmitAsync()
     {
-        // On ne fait jamais confiance à Input.Step pour la décision de sécurité :
-        // on ré-interroge toujours l'état réel côté serveur.
-        var postedStep = ParsePostedStep();
-        var resolution = await Auth.ResolveAsync(Input.PersonNumber ?? string.Empty);
-        ApplyResolution(resolution);
+        _error = null;
+        var result = await Auth.AuthenticateAsync(Input.PersonNumber, Input.Password,
+            HttpContext.RequestAborted);
+        Input.Password = string.Empty;
 
-        // Étape 1 : identification. On affiche l'écran suivant, sans rien vérifier.
-        if (postedStep is null)
+        if (result.Status != HrSignInStatus.Success || result.Identity is null)
         {
-            SyncPostedStep();
+            _error = result.Status == HrSignInStatus.DirectoryUnavailable
+                ? "Corporate directory sign-in is temporarily unavailable. Contact IT support."
+                : "Unable to sign in. Verify your credentials and HR access.";
             return;
         }
 
-        // Étape 2 : mot de passe. L'état serveur peut avoir changé depuis l'affichage
-        // (compte désactivé entre-temps, import qui a retiré la personne des RH...).
-        if (!IsPasswordStep(_step))
-        {
-            SyncPostedStep();
-            return;
-        }
-
-        // Filet de sécurité : le formulaire ne doit jamais arriver ici sans mot de passe,
-        // mais on ne laisse pas un champ absent remonter jusqu'au hasher.
-        if (string.IsNullOrEmpty(Input.Password))
-        {
-            _error = "Enter your password.";
-            SyncPostedStep();
-            return;
-        }
-
-        var ok = _step == LoginStep.CreatePassword
-            ? await Auth.SetPasswordAsync(resolution.EmployeeId, Input.Password)
-            : await Auth.VerifyPasswordAsync(resolution.EmployeeId, Input.Password);
-
-        if (!ok)
-        {
-            _error = _step == LoginStep.CreatePassword
-                ? "That password could not be set. Reload the page and try again."
-                : "Incorrect password, try again please or contact your HR colleague to reset your password.";
-            Input.Password = Input.ConfirmPassword = string.Empty;
-            SyncPostedStep();
-            return;
-        }
-
-        var identity = await Auth.GetIdentityAsync(resolution.EmployeeId);
-        var principal = HrAuthService.BuildPrincipal(resolution.EmployeeId, identity.PersonNumber, identity.FullName);
-        await HttpContext.SignInAsync(HrAuth.Scheme, principal, new AuthenticationProperties { IsPersistent = false });
-
+        await HttpContext.SignInAsync(HrAuth.Scheme,
+            HrAuthService.BuildPrincipal(result.Identity),
+            new AuthenticationProperties { IsPersistent = false });
         Nav.NavigateTo("/admin/events");
     }
 
-    private void ApplyResolution(LoginResolution resolution)
+    public sealed class LoginInput
     {
-        _step = resolution.Step;
-        _error = resolution.Step switch
-        {
-            // Message identique pour un matricule inconnu et pour un non-RH :
-            // l'écran de connexion ne doit pas révéler qui travaille aux RH.
-            LoginStep.Denied or LoginStep.NotHr => "This system is for Human Resources use only.",
-            LoginStep.Disabled => "Your access is disabled. Ask an HR colleague to reset it.",
-            _ => null
-        };
-    }
-
-    public class LoginInput : IValidatableObject
-    {
-        // Toutes ces propriétés sont nullable : en SSR statique, le binding de formulaire
-        // affecte null aux champs absents du POST (le mot de passe à l'étape 1, par exemple).
-        public string? Step { get; set; }
-
         [Required(ErrorMessage = "Enter your Person Number.")]
-        public string? PersonNumber { get; set; }
-
-        [MinLength(8, ErrorMessage = "At least 8 characters.")]
-        public string? Password { get; set; }
-
-        public string? ConfirmPassword { get; set; }
-
-        public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
-        {
-            // Le mot de passe n'est obligatoire qu'aux étapes qui l'affichent :
-            // un [Required] fixe bloquerait l'étape 1.
-            if (!Enum.TryParse<LoginStep>(Step, out var step)) yield break;
-            if (step is not (LoginStep.EnterPassword or LoginStep.CreatePassword)) yield break;
-
-            if (string.IsNullOrEmpty(Password))
-            {
-                yield return new ValidationResult("Enter your password.", [nameof(Password)]);
-                yield break;
-            }
-
-            if (step == LoginStep.CreatePassword && ConfirmPassword != Password)
-            {
-                yield return new ValidationResult("Both passwords must match.", [nameof(ConfirmPassword)]);
-            }
-        }
+        public string PersonNumber { get; set; } = string.Empty;
+        [Required(ErrorMessage = "Enter your corporate password.")]
+        public string Password { get; set; } = string.Empty;
     }
 }
