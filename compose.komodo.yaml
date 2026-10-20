@@ -1,0 +1,48 @@
+# Deploy with Komodo Stack from this Git repository/branch, using the Dockerfile.
+# Create the referenced variables in Komodo's secure environment configuration.
+services:
+  mtn-attendance:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: mtn-attendance:hr-ldaps
+    restart: unless-stopped
+    init: true
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ASPNETCORE_URLS: http://+:8080
+      TZ: Africa/Abidjan
+      DataProtection__KeysPath: /app/keys
+      ReverseProxy__TlsTerminated: "true"
+      ReverseProxy__KnownProxies: ${TRUSTED_PROXY_IP:?set_trusted_reverse_proxy_ip}
+      ConnectionStrings__Default: ${POSTGRES_CONNECTION_STRING:?set_postgres_connection_string}
+      Ldaps__PrimaryHost: ${LDAPS_PRIMARY_HOST:?set_primary_host}
+      Ldaps__DisasterRecoveryHost: ${LDAPS_DR_HOST:?set_dr_host}
+      Ldaps__Port: ${LDAPS_PORT:-3443}
+      Ldaps__UserSearchBase: ${LDAPS_USER_BASE:?set_user_base}
+      Ldaps__GroupSearchBase: ${LDAPS_GROUP_BASE:-}
+      Ldaps__BindUsername: ${LDAPS_BIND_USERNAME:?set_bind_username}
+      Ldaps__BindPassword: ${LDAPS_BIND_PASSWORD:?set_rotated_password}
+      Ldaps__EmployeeNumberAttribute: ${LDAPS_EMPLOYEE_NUMBER_ATTRIBUTE:-employeeNumber}
+    volumes:
+      - mtn_attendance_keys:/app/keys
+    networks:
+      - mtn_attendance
+    ports:
+      # Binds only to server loopback. The public HTTPS proxy must connect accordingly.
+      - "127.0.0.1:${ATTENDANCE_PORT:-18080}:8080"
+    healthcheck:
+      test: ["CMD","dotnet","--info"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  mtn_attendance_keys:
+
+networks:
+  mtn_attendance:
+    driver: bridge
