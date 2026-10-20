@@ -5,111 +5,62 @@
 @inject HrAuthService Auth
 @inject AuthenticationStateProvider AuthState
 
-<PageTitle>HR Accounts</PageTitle>
+<PageTitle>HR Directory Access</PageTitle>
 
 <div class="page">
     <div class="page-head">
         <div>
-            <h1>HR Accounts</h1>
-            <p>Everyone in the Human Resources subdivision can manage events and reset a colleague's password.</p>
+            <h1>HR Directory Access</h1>
+            <p>Access is controlled by the corporate directory and the latest approved HR roster.
+               Passwords cannot be reset from this application.</p>
         </div>
     </div>
 
     <div class="table-card">
         <table>
             <thead>
-                <tr>
-                    <th>Name</th>
-                    <th>Person number</th>
-                    <th>Status</th>
-                    <th>Last login</th>
-                    <th class="right">Actions</th>
-                </tr>
+                <tr><th>Name</th><th>Person number</th><th>HR access</th><th>Last login</th></tr>
             </thead>
             <tbody>
                 @foreach (var account in _accounts)
                 {
                     <tr>
-                        <td>@account.FullName</td>
-                        <td>@account.PersonNumber</td>
+                        <td>@account.FullName</td><td>@account.PersonNumber</td>
                         <td>
-                            @if (!account.IsEnabled)
+                            @if (account.IsEnabled)
                             {
-                                <span class="pill disabled">Disabled</span>
-                            }
-                            else if (!account.HasPassword)
-                            {
-                                <span class="pill pending">No account yet</span>
+                                <span class="pill active">Roster authorized</span>
                             }
                             else
                             {
-                                <span class="pill active">Active</span>
+                                <span class="pill disabled">Disabled</span>
                             }
                         </td>
                         <td>
                             @Ui.LastLogin(account.LastLoginAt, DateTime.Now)
                             @if (account.EmployeeId == _currentEmployeeId)
                             {
-                                <text> (current user)</text>
-                            }
-                        </td>
-                        <td class="right">
-                            @if (account.EmployeeId == _currentEmployeeId)
-                            {
-                                <em style="color:var(--muted)">Active session</em>
-                            }
-                            else if (_confirming == account.EmployeeId)
-                            {
-                                <span style="display:inline-flex;gap:.5rem;align-items:center">
-                                    <span style="color:var(--muted)">Clear password?</span>
-                                    <button class="btn btn-danger" @onclick="() => ResetAsync(account.EmployeeId)">Confirm</button>
-                                    <button class="btn btn-quiet" style="padding:.5rem 1rem;font-size:.9rem"
-                                            @onclick="() => _confirming = null">Cancel</button>
-                                </span>
-                            }
-                            else
-                            {
-                                <button class="btn btn-danger" @onclick="() => _confirming = account.EmployeeId">Reset</button>
+                                <span> (current user)</span>
                             }
                         </td>
                     </tr>
                 }
             </tbody>
         </table>
-
         @if (_accounts.Count == 0)
         {
-            <p class="empty">No HR accounts yet. They are created automatically on the next roster import.</p>
+            <p class="empty">No HR accounts found. Import the approved employee roster.</p>
         }
     </div>
-
-    @if (_message is not null)
-    {
-        <p style="margin-top:1.25rem;font-weight:600">@_message</p>
-    }
 </div>
 
 @code {
     private List<HrColleague> _accounts = [];
     private int _currentEmployeeId;
-    private int? _confirming;
-    private string? _message;
-
     protected override async Task OnInitializedAsync()
     {
         var state = await AuthState.GetAuthenticationStateAsync();
         _currentEmployeeId = state.User.EmployeeId();
-        _accounts = await Auth.GetHrAccountsAsync();
-    }
-
-    private async Task ResetAsync(int employeeId)
-    {
-        var target = _accounts.FirstOrDefault(a => a.EmployeeId == employeeId);
-        var ok = await Auth.ResetPasswordAsync(_currentEmployeeId, employeeId);
-        _confirming = null;
-        _message = ok
-            ? $"{target?.FullName} will be asked to set a new password at their next login."
-            : "That account could not be reset.";
         _accounts = await Auth.GetHrAccountsAsync();
     }
 }
