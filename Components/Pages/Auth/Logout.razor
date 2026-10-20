@@ -1,0 +1,27 @@
+@page "/admin/logout"
+@attribute [Authorize]
+@using Microsoft.AspNetCore.Authentication
+@inject NavigationManager Nav
+
+<PageTitle>Sign out</PageTitle>
+<div class="mobile-card">
+    <h1>Sign out</h1>
+    <p>End your HR attendance session?</p>
+    <form method="post" action="/admin/logout">
+        <AntiforgeryToken />
+        <button class="btn btn-primary btn-block" type="submit">Sign out</button>
+    </form>
+    <a href="/admin/events" class="back-link">Cancel</a>
+</div>
+
+@code {
+    [CascadingParameter] public HttpContext? HttpContext { get; set; }
+    protected override async Task OnInitializedAsync()
+    {
+        if (HttpContext?.Request.Method == "POST")
+        {
+            await HttpContext.SignOutAsync(HrAuth.Scheme);
+            HttpContext.Response.Redirect("/admin/login");
+        }
+    }
+}
