@@ -280,7 +280,7 @@ public class EmployeeImportService(IDbContextFactory<AppDbContext> factory, Time
                 employee.HrAccount = new HrAccount { CreatedAt = now, IsEnabled = true };
                 report.HrAccountsCreated++;
             }
-            else if (!employee.HrAccount.IsEnabled && employee.HrAccount.HasPassword)
+            else if (!employee.HrAccount.IsEnabled)
             {
                 // Retour dans la subdivision RH : on réactive sans toucher au mot de passe.
                 employee.HrAccount.IsEnabled = true;
