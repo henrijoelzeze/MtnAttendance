@@ -16,7 +16,7 @@ Do not use credentials leaked in chat or Git history; rotate first. Komodo and D
 - `TRUSTED_PROXY_IP` is the actual IP of the reverse proxy *as seen by the app*, not an arbitrary wildcard. For a reverse proxy on another host, replace the loopback port binding and use a private network / firewall.
 - External DNS/domain certificate and reverse-proxy configuration, not provisioned by this Compose file.
 
-The default Compose healthcheck tests whether dotnet can run, not application health. Check `GET /healthz` from the host and verify DB/LDAPS workflows separately. A liveness endpoint does not mean all dependencies are ready.
+No container healthcheck is configured until a dependable HTTP probe is available. Check `GET /healthz` from the host and verify DB/LDAPS workflows separately. A liveness endpoint does not mean all dependencies are ready.
 
 ## Pre-merge validation
 
