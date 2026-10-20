@@ -138,6 +138,7 @@ public class EventService(IDbContextFactory<AppDbContext> factory, TimeProvider 
     {
         if (value is null) return "";
 
+        if (value.Length > 0 && "=+-@".Contains(value[0])) value = "'" + value;
         return value.Contains(',') || value.Contains('"')
             ? $"\"{value.Replace("\"", "\"\"")}\""
             : value;
