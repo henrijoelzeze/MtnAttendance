@@ -4,3 +4,7 @@ obj/
 .vscode/
 *.user
 appsettings.Local.json
+.env
+.env.*
+appsettings.Production.json
+appsettings.Secrets.json
