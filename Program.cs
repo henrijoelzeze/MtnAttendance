@@ -2,6 +2,7 @@ using System.Net;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Antiforgery;
 using System.Text.RegularExpressions;
 using System.Threading.RateLimiting;
 using Microsoft.EntityFrameworkCore;
@@ -150,6 +151,12 @@ app.MapGet("/admin/events/{id:int}/attendees.csv", async (int id, EventService e
     return file is null ? Results.NotFound() : Results.File(file.Value.Content, "text/csv", file.Value.FileName);
 }).RequireAuthorization();
 
-// Sign-out uses a CSRF-protected static SSR POST page (Components/Pages/Auth/Logout.razor).
+// Logout requires a valid antiforgery token; GET only shows the confirmation page.
+app.MapPost("/admin/logout/confirm", async (HttpContext http, IAntiforgery antiforgery) =>
+{
+    await antiforgery.ValidateRequestAsync(http);
+    await http.SignOutAsync(HrAuth.Scheme);
+    return Results.LocalRedirect("/admin/login");
+}).RequireAuthorization();
 
 await app.RunAsync();
