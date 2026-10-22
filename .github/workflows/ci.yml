@@ -36,6 +36,9 @@ jobs:
       - name: Build runtime Docker image
         run: docker build --pull --tag mtn-attendance:security .
 
+      - name: Verify native Linux GSSAPI library exists in runtime image
+        run: docker run --rm --entrypoint /bin/sh mtn-attendance:security -c 'find /usr/lib -name libgssapi_krb5.so.2 -print -quit | grep -q .'
+
       - name: Scan operating-system and library vulnerabilities in final image
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
