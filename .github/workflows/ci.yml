@@ -46,6 +46,6 @@ jobs:
           scan-type: image
           format: table
           exit-code: '1'
-          severity: CRITICAL,HIGH
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
           vuln-type: os,library
           ignore-unfixed: false
