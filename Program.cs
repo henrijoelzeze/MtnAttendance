@@ -52,6 +52,7 @@ builder.Services.Configure<ForwardedHeadersOptions>(options =>
 });
 
 builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.AddMemoryCache();
 
 builder.Services.AddScoped<CheckInService>();
 builder.Services.AddScoped<HrAuthService>();
@@ -61,7 +62,9 @@ builder.Services.AddOptions<LdapsOptions>()
     .Validate(o => !string.IsNullOrWhiteSpace(o.PrimaryHost) && o.Port is > 0 and <= 65535 &&
         !string.IsNullOrWhiteSpace(o.UserSearchBase) && !string.IsNullOrWhiteSpace(o.BindUsername) &&
         !string.IsNullOrWhiteSpace(o.BindPassword) &&
-        Regex.IsMatch(o.EmployeeNumberAttribute, "^[A-Za-z][A-Za-z0-9-]{0,63}$"),
+        Regex.IsMatch(o.EmployeeNumberAttribute, "^[A-Za-z][A-Za-z0-9-]{0,63}$") &&
+        Regex.IsMatch(o.HrDepartmentAttribute, "^[A-Za-z][A-Za-z0-9-]{0,63}$") &&
+        (!string.IsNullOrWhiteSpace(o.HrGroupDn) || !string.IsNullOrWhiteSpace(o.HrDepartmentValue)),
         "LDAPS configuration is incomplete. Set protected runtime environment variables.")
     .ValidateOnStart();
 builder.Services.AddScoped<EmployeeImportService>();
@@ -117,7 +120,12 @@ var app = builder.Build();
 
 if (!app.Environment.IsDevelopment())
 {
-    app.UseExceptionHandler("/Error", createScopeForErrors: true);
+    app.UseExceptionHandler(handler => handler.Run(async http =>
+    {
+        http.Response.StatusCode = StatusCodes.Status500InternalServerError;
+        http.Response.ContentType = "text/plain; charset=utf-8";
+        await http.Response.WriteAsync("An unexpected error occurred. Contact IT support.");
+    }));
     app.UseHsts();
 }
 
