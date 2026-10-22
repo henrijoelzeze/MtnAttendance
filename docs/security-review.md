@@ -24,7 +24,7 @@ The package upgrades are intended to reduce unpatched dependency exposure, not t
 - `Directory.Build.props` enables `NuGetAudit=true`, `NuGetAuditMode=all`, and `NuGetAuditLevel=low`.
 - In CI, warnings `NU1900` through `NU1905` are treated as errors, including inability to retrieve advisory data.
 - CI lists known vulnerable packages including transitive dependencies.
-- CI builds a freshly pulled .NET 10 image and scans OS and application library dependencies using Trivy. High and critical findings fail the CI job. Check the job logs for full results.
+- CI builds a freshly pulled .NET 10 image and scans OS and application library dependencies using Trivy. Findings at any reported severity (including low and moderate) now fail the CI job. Check the job logs for the detected vulnerabilities and tool/database versions.
 - Dependabot monitors NuGet, Docker and GitHub Actions dependencies weekly (once its configuration is merged to the default branch).
 
 ## Unresolved security risks and validation gaps
@@ -33,6 +33,6 @@ The package upgrades are intended to reduce unpatched dependency exposure, not t
 3. **Public check-in:** QR check-in still relies on an entered matricule, which does not establish the physical attendee's identity. Add stronger proof if needed by the threat model.
 4. **Access control:** Test directory-based HR authorizations including non-HR denial, disabled users, group changes, session cookie lifetime and Blazor interactive circuits.
 5. **Operations:** Perform external TLS scans, environment secret-management review, PostgreSQL privilege review and log redaction; a clean dependency scan cannot establish safety of infrastructure or business logic.
-6. **Final runtime:** No container vulnerability result is applicable until the new image builds and security scan completes successfully. Rebuild and redeploy only after review.
+6. **Final runtime:** The GitHub Actions image scan covers the CI-built image only. Verify the final green scan result and rebuild the identical reviewed branch in Komodo before deployment. Rebuild and redeploy only after review.
 
 **Release gate:** Do not deploy unreviewed updates to production. Require successful CI, LDAP functional tests, secret rotation and corporate security review.
