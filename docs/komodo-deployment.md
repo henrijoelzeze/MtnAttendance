@@ -23,3 +23,25 @@ No container healthcheck is configured until a dependable HTTP probe is availabl
 Run `dotnet restore`, `dotnet build -c Release`, `docker compose -f compose.komodo.yaml config` with injected nonsecret placeholders, and exercise the critical workflows. The app does not start without configured directory secrets.
 
 **Important:** This is direct LDAPS, not Entra ID. The employee QR check-in remains unauthenticated.
+
+
+## Login troubleshooting
+
+The HR login first queries the local PostgreSQL `"Employees"` and `"HrAccounts"` tables and rejects any inactive, non-HR or unprovisioned identity. A non-HR matricule returns the generic invalid-credentials/HR-access error **before LDAPS is called**. This is intentional.
+
+In the **same database used by Komodo**, run this read-only SQL to inspect roster provisioning:
+
+```sql
+SELECT COUNT(*) AS employees FROM "Employees";
+SELECT COUNT(*) AS hr_eligible
+FROM "Employees" e
+JOIN "HrAccounts" h ON h."EmployeeId" = e."Id"
+WHERE e."IsActive" AND h."IsEnabled"
+  AND lower(trim(e."Subdivision")) = 'human resources';
+```
+
+Zero HR-eligible rows means no one can sign in. Provision the authorized HR employee roster through an approved, access-controlled bootstrap/import method; **do not** disable the HR eligibility check or assign non-HR staff an HR role just to test LDAP. A correct password alone never grants HR access.
+
+The Docker image includes `libgssapi-krb5-2`, required by some Linux LDAP/GSSAPI runtime paths. Rebuild the image (not merely restart the old container) after pulling the updated Dockerfile. Confirm `ldconfig -p | grep libgssapi_krb5` inside the image if needed.
+
+For deployments with HTTPS terminated at a reverse proxy, `ReverseProxy__TlsTerminated=true` must be set and the container must run the updated branch/image. If `HttpsRedirectionMiddleware` still logs 'Failed to determine the https port', check the **effective** environment and image/version; do not disable HTTPS at the public reverse proxy.
