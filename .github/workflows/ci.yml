@@ -39,6 +39,43 @@ jobs:
       - name: Verify native Linux GSSAPI library exists in runtime image
         run: docker run --rm --entrypoint /bin/sh mtn-attendance:security -c 'find /usr/lib -name libgssapi_krb5.so.2 -print -quit | grep -q .'
 
+      - name: Probe .NET LDAP native load in offline Alpine container
+        run: |
+          mkdir -p /tmp/ldap-probe
+          cat > /tmp/ldap-probe/LdapProbe.csproj <<'EOF'
+          <Project Sdk="Microsoft.NET.Sdk">
+            <PropertyGroup>
+              <TargetFramework>net10.0</TargetFramework>
+              <OutputType>Exe</OutputType>
+              <ImplicitUsings>enable</ImplicitUsings>
+            </PropertyGroup>
+            <ItemGroup>
+              <PackageReference Include="System.DirectoryServices.Protocols" Version="10.0.13" />
+            </ItemGroup>
+          </Project>
+          EOF
+          cat > /tmp/ldap-probe/Program.cs <<'EOF'
+          using System.DirectoryServices.Protocols;
+          using System.Net;
+          using var ldap = new LdapConnection(
+              new LdapDirectoryIdentifier("127.0.0.1", 1),
+              new NetworkCredential("probe", "not-a-password"), AuthType.Basic);
+          ldap.Timeout = TimeSpan.FromSeconds(2);
+          ldap.SessionOptions.ProtocolVersion = 3;
+          ldap.SessionOptions.SecureSocketLayer = true;
+          try
+          {
+              ldap.Bind();
+              throw new InvalidOperationException("Unexpected success for offline probe");
+          }
+          catch (LdapException)
+          {
+              Console.WriteLine("LDAP native libraries loaded; offline connection failed as expected.");
+          }
+          EOF
+          dotnet publish /tmp/ldap-probe/LdapProbe.csproj -c Release -o /tmp/ldap-probe/out /p:UseAppHost=false
+          docker run --rm --network none -v /tmp/ldap-probe/out:/probe:ro --entrypoint dotnet mtn-attendance:security /probe/LdapProbe.dll
+
       - name: Scan operating-system and library vulnerabilities in final image
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
