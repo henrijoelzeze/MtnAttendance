@@ -24,6 +24,11 @@ services:
       Ldaps__BindUsername: ${LDAPS_BIND_USERNAME:?set_bind_username}
       Ldaps__BindPassword: ${LDAPS_BIND_PASSWORD:?set_rotated_password}
       Ldaps__EmployeeNumberAttribute: ${LDAPS_EMPLOYEE_NUMBER_ATTRIBUTE:-employeeNumber}
+      # Authorize by the actual HR directory group DN when IT provides it;
+      # otherwise compare the configured LDAP department attribute to Human Resources.
+      Ldaps__HrGroupDn: ${LDAPS_HR_GROUP_DN:-}
+      Ldaps__HrDepartmentAttribute: ${LDAPS_HR_DEPARTMENT_ATTRIBUTE:-department}
+      Ldaps__HrDepartmentValue: ${LDAPS_HR_DEPARTMENT_VALUE:-Human Resources}
     volumes:
       - mtn_attendance_keys:/app/keys
     networks:

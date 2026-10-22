@@ -1,0 +1,11 @@
+<Project>
+  <!-- Audit all direct and transitive dependencies (including low-severity advisories).
+       In CI, fail restore if vulnerability information is missing or any known advisory
+       affects the selected package graph. -->
+  <PropertyGroup>
+    <NuGetAudit>true</NuGetAudit>
+    <NuGetAuditMode>all</NuGetAuditMode>
+    <NuGetAuditLevel>low</NuGetAuditLevel>
+    <WarningsAsErrors Condition="'$(CI)' == 'true'">$(WarningsAsErrors);NU1900;NU1901;NU1902;NU1903;NU1904;NU1905</WarningsAsErrors>
+  </PropertyGroup>
+</Project>
