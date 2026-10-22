@@ -1,39 +1,52 @@
-# HR-only LDAPS authentication
+# MTN Attendance — HR directory authentication
 
-This feature authenticates HR staff using direct LDAPS directory password verification, **not** Microsoft Entra ID / OpenID Connect. Public employee QR check-in at `/c/{QrToken}` is unchanged.
+> This implementation uses **LDAPS password verification**, not Microsoft Entra ID single sign-on (OpenID Connect). To implement true Microsoft SSO, register the application in Entra ID and supply Tenant ID / Client ID, then use OIDC and Entra app roles/groups.
 
-## Authorization
+## Corrected login flow (no Excel roster prerequisite)
 
-Successful login requires a unique active employee in the approved local roster, subdivision `Human Resources`, enabled HR account, exactly one matching LDAP user, and a successful user-password bind. Access is rechecked when the cookie is validated. The old HR-local password and reset functionality is removed from the UI; the legacy database column is retained for compatibility.
+1. The user enters their matricule and corporate directory password.
+2. The application connects over certificate-validated LDAPS using a read-only service identity and searches for exactly one user by the configured matricule attribute.
+3. The application verifies the **user password** via a second LDAPS bind.
+4. It verifies **HR membership from the LDAP entry**, not PostgreSQL:
+   - If `Ldaps__HrGroupDn` is configured, the user's direct `memberOf` entries must include that exact distinguished name.
+   - Otherwise, the configured `Ldaps__HrDepartmentAttribute` must equal `Ldaps__HrDepartmentValue` (default value `Human Resources`, default attribute `department`).
+5. Only after both checks succeed, the app automatically creates/updates its **local** `Employee` and `HrAccount` rows to support existing event creator IDs and audit fields, then issues the HR login cookie.
 
-## Protected configuration
+**Important:** The local `Employees` table may start empty after migrations. A spreadsheet upload is **not required** for initial HR login. It is still used separately for employee attendance headcounts and QR check-in. PostgreSQL tables still need to be migrated.
 
-Use environment variables or approved secrets management, **never source control**, for:
+**Fail closed:** A missing or mismatched HR directory attribute or group denies access. If the primary and DR directory are both unreachable, no new login is allowed. Existing cookies periodically revalidate HR membership against the directory (successful checks are cached for up to two minutes per app instance).
 
-| Setting | Usage |
-| --- | --- |
-| `Ldaps__PrimaryHost` | Production hostname |
-| `Ldaps__DisasterRecoveryHost` | Failover hostname |
-| `Ldaps__Port` | Corporate LDAPS port |
-| `Ldaps__UserSearchBase` | User subtree DN |
-| `Ldaps__GroupSearchBase` | Informational/future group policy; not currently checked |
-| `Ldaps__BindUsername` | Read-only service account bind identity |
-| `Ldaps__BindPassword` | **Rotated** service-account password |
-| `Ldaps__EmployeeNumberAttribute` | Employee-number LDAP attribute; defaults to `employeeNumber`, must be confirmed |
-| `ConnectionStrings__Default` | PostgreSQL connection string with **rotated** password |
+## Required Komodo configuration
 
-Directory server details and credentials supplied earlier are deliberately **not** stored in this public GitHub repository. The PostgreSQL password previously exposed in Git history must also be rotated; removing it from the current configuration does not remove historical exposure.
+Use the existing secret-managed variables `LDAPS_PRIMARY_HOST`, `LDAPS_DR_HOST`, `LDAPS_PORT`, `LDAPS_USER_BASE`, `LDAPS_BIND_USERNAME`, `LDAPS_BIND_PASSWORD`, `POSTGRES_CONNECTION_STRING`, and `TRUSTED_PROXY_IP`. The secret values must be rotated after disclosure.
 
-## Deployment and validation
+The compose stack maps:
 
-1. Confirm bind DN/username format and the LDAP attribute matching HR matricules with the directory team. The group-search base alone does not establish an HR group authorization rule.
-2. Provide TLS trust chain and corporate DNS/network access to primary and DR servers. Never bypass certificate or hostname validation.
-3. Provide runtime secrets; do not put them in `appsettings.json`.
-4. Install .NET 10 and run `dotnet restore` and `dotnet build`. No build or directory integration test has been performed in this environment.
-5. Test valid HR sign-in, incorrect password, unknown employee, non-HR user, disabled account, duplicate directory matches, primary-server outage and DR failover, plus public QR check-in.
-6. Test login throttling behind your actual reverse proxy. The current rate limiter uses source IP; shared NAT/proxy IP addresses can cause collective throttling.
-7. Consider CSRF-protected POST logout, immediate authorization revalidation in long-running Blazor circuits, and automated tests before production deployment.
+| Komodo variable | .NET setting | Purpose |
+| --- | --- | --- |
+| `LDAPS_EMPLOYEE_NUMBER_ATTRIBUTE` | `Ldaps__EmployeeNumberAttribute` | LDAP matricule attribute (default `employeeNumber`) |
+| `LDAPS_HR_GROUP_DN` | `Ldaps__HrGroupDn` | Optional **specific** HR group DN; only direct `memberOf` supported |
+| `LDAPS_HR_DEPARTMENT_ATTRIBUTE` | `Ldaps__HrDepartmentAttribute` | LDAP organizational attribute (default `department`) |
+| `LDAPS_HR_DEPARTMENT_VALUE` | `Ldaps__HrDepartmentValue` | Required exact department value (default `Human Resources`) |
+| `LDAPS_GROUP_BASE` | `Ldaps__GroupSearchBase` | Group search base supplied by IT (does not itself identify HR group) |
 
-**Security incident:** Rotate both the directory bind account password previously shared in chat and the PostgreSQL database password previously committed publicly. Investigate prior exposure and access logs.
+**The IT directory team must confirm the real matricule attribute, the exact HR field/value or a specific HR group DN, and the bind-name format.** A user-search base and a group-search base alone do not identify authorized HR personnel. If the directory uses indirect or nested groups, adjust the membership implementation after confirming its actual schema.
 
-Note: the public employee QR check-in still relies on employee-number entry and does not prove the physical identity of the attendee.
+## Operational verification
+
+- Rebuild the updated image from the feature branch in Komodo (a restart of the old image is not enough).
+- Verify corporate DNS, both LDAPS endpoints, the CA chain, and required Linux LDAP/GSSAPI libraries.
+- Test a genuine HR member and a non-HR member using their own corporate credentials. Never change someone's HR role just to test.
+- For a successful HR sign-in, confirm the `Employees` row is created automatically.
+- For a non-HR sign-in, confirm HTTP login form remains visible with a generic rejection and **no local account is created**.
+- Test incorrect password, unknown matricule, duplicate directory matches, unreachable primary and DR.
+- Verify login and logout via HTTPS reverse proxy; HR events and public QR check-in require a migrated database.
+- Confirm that the app can create events after first HR login, and that the roster import can subsequently populate attendance headcounts.
+
+## Security and limitations
+
+- LDAPS is **not** browser SSO. The user enters their password into the application; if true corporate SSO/MFA is required, use Entra ID OIDC.
+- The local HR accounts list is not the authorization source; it reflects successful directory sign-ins.
+- Membership revalidation is bounded by a short cache and existing Blazor interactive circuit lifetimes should be tested in your security review.
+- The service password and the previously committed PostgreSQL password must be rotated, and public Git history still contains the old PostgreSQL secret.
+- No internal directory server names, credentials, or tokens are committed here.
