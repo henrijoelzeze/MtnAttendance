@@ -6,6 +6,7 @@ on:
   push:
     branches:
       - fix/hr-ldap-first-login
+      - experiment/alpine-ldaps-runtime
   workflow_dispatch:
 
 permissions:
