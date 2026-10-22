@@ -5,18 +5,27 @@ using MtnAttendance.Domain;
 
 namespace MtnAttendance.Services;
 
-public enum DirectoryAuthenticationResult { Success, InvalidCredentials, Unavailable }
+public enum DirectoryAuthenticationStatus { Success, InvalidCredentials, NotHr, Unavailable }
+public enum DirectoryAuthorizationStatus { Authorized, Denied, Unavailable }
+
+public sealed record DirectoryEmployee(
+    string PersonNumber, string FirstName, string LastName, string? Email);
+
+public sealed record DirectoryAuthenticationResult(
+    DirectoryAuthenticationStatus Status, DirectoryEmployee? Employee = null);
 
 public interface IHrDirectoryAuthenticator
 {
-    Task<DirectoryAuthenticationResult> VerifyAsync(string personNumber, string password,
-        CancellationToken cancellationToken = default);
+    Task<DirectoryAuthenticationResult> AuthenticateAsync(
+        string personNumber, string password, CancellationToken cancellationToken = default);
+    Task<DirectoryAuthorizationStatus> HasHrAccessAsync(
+        string personNumber, CancellationToken cancellationToken = default);
 }
 
 /// <summary>
-/// Searches the directory with a read-only service bind, then validates the user's
-/// own password with a distinct certificate-validated LDAPS bind.
-/// Directory passwords and distinguished names are never persisted or logged.
+/// Corporate directory is the source of truth for identity and HR membership.
+/// The read-only service bind locates users; a second bind authenticates their
+/// password. No local employee roster is needed for initial login.
 /// </summary>
 public sealed class LdapsHrAuthenticator(
     IOptions<LdapsOptions> options,
@@ -24,95 +33,189 @@ public sealed class LdapsHrAuthenticator(
 {
     private readonly LdapsOptions _options = options.Value;
 
-    public Task<DirectoryAuthenticationResult> VerifyAsync(string personNumber, string password,
-        CancellationToken cancellationToken = default)
+    public Task<DirectoryAuthenticationResult> AuthenticateAsync(
+        string personNumber, string password, CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(personNumber) || string.IsNullOrEmpty(password))
-            return Task.FromResult(DirectoryAuthenticationResult.InvalidCredentials);
+            return Task.FromResult(new DirectoryAuthenticationResult(DirectoryAuthenticationStatus.InvalidCredentials));
 
-        // The LDAP client is synchronous and timeout-limited; cancellation cannot
-        // interrupt an already-running native LDAP operation.
-        return Task.Run(() => Verify(personNumber, password), cancellationToken);
+        // LdapConnection is synchronous and timeout-bounded. Cancellation can
+        // prevent starting work but cannot interrupt an in-flight native call.
+        return Task.Run(() => Authenticate(personNumber, password), cancellationToken);
     }
 
-    private DirectoryAuthenticationResult Verify(string personNumber, string password)
+    public Task<DirectoryAuthorizationStatus> HasHrAccessAsync(
+        string personNumber, CancellationToken cancellationToken = default)
     {
-        var hosts = new[] { _options.PrimaryHost, _options.DisasterRecoveryHost }
-            .Where(host => !string.IsNullOrWhiteSpace(host))
-            .Distinct(StringComparer.OrdinalIgnoreCase);
+        if (string.IsNullOrWhiteSpace(personNumber))
+            return Task.FromResult(DirectoryAuthorizationStatus.Denied);
 
-        foreach (var host in hosts)
+        return Task.Run(() => CheckHrAccess(personNumber), cancellationToken);
+    }
+
+    private DirectoryAuthenticationResult Authenticate(string personNumber, string password)
+    {
+        foreach (var host in Hosts())
         {
             try
             {
-                using var service = Connect(host!, _options.BindUsername, _options.BindPassword);
-                service.Bind();
-
-                // LDAP filter escaping prevents injection.
-                // Match raw roster value or its canonical person-number variant.
-                var original = EscapeFilter(personNumber.Trim());
-                var normalized = EscapeFilter(PersonNumber.Normalize(personNumber));
-                var filter = original == normalized
-                    ? $"({_options.EmployeeNumberAttribute}={original})"
-                    : $"(|({_options.EmployeeNumberAttribute}={original})({_options.EmployeeNumberAttribute}={normalized}))";
-
-                var search = new SearchRequest(_options.UserSearchBase, filter,
-                    SearchScope.Subtree, _options.EmployeeNumberAttribute)
+                using var service = Connect(host);
+                try { service.Bind(); }
+                catch (LdapException e) when (e.ErrorCode == 49)
                 {
-                    SizeLimit = 2,
-                    TimeLimit = TimeSpan.FromSeconds(8)
-                };
-
-                var response = (SearchResponse)service.SendRequest(search);
-                if (response.Entries.Count != 1)
-                    return DirectoryAuthenticationResult.InvalidCredentials;
-
-                var userDn = response.Entries[0].DistinguishedName;
-                if (string.IsNullOrWhiteSpace(userDn))
-                    return DirectoryAuthenticationResult.InvalidCredentials;
-
-                using var employee = Connect(host!, userDn, password);
-                try
-                {
-                    employee.Bind();
-                    return DirectoryAuthenticationResult.Success;
+                    logger.LogWarning("Corporate directory service bind rejected.");
+                    return new(DirectoryAuthenticationStatus.Unavailable);
                 }
-                catch (LdapException ex) when (ex.ErrorCode == 49)
+
+                var entry = SearchEmployee(service, personNumber);
+                if (entry is null)
+                    return new(DirectoryAuthenticationStatus.InvalidCredentials);
+
+                // Always validate the employee's actual password before evaluating
+                // HR attributes or exposing any user-specific outcome.
+                using var employee = Connect(host, entry.DistinguishedName, password);
+                try { employee.Bind(); }
+                catch (LdapException e) when (e.ErrorCode == 49)
                 {
-                    return DirectoryAuthenticationResult.InvalidCredentials;
+                    return new(DirectoryAuthenticationStatus.InvalidCredentials);
                 }
+
+                if (!IsHr(entry))
+                {
+                    logger.LogInformation("Directory sign-in denied: employee is not in the configured HR scope.");
+                    return new(DirectoryAuthenticationStatus.NotHr);
+                }
+
+                var number = Attribute(entry, _options.EmployeeNumberAttribute);
+                if (string.IsNullOrWhiteSpace(number) ||
+                    PersonNumber.Normalize(number) != PersonNumber.Normalize(personNumber))
+                    return new(DirectoryAuthenticationStatus.InvalidCredentials);
+
+                var firstName = Attribute(entry, "givenName");
+                var lastName = Attribute(entry, "sn");
+                var displayName = Attribute(entry, "displayName") ?? number;
+                return new(DirectoryAuthenticationStatus.Success,
+                    new DirectoryEmployee(
+                        number,
+                        string.IsNullOrWhiteSpace(firstName) ? displayName : firstName,
+                        string.IsNullOrWhiteSpace(lastName) ? "-" : lastName,
+                        Attribute(entry, "mail")));
             }
-            catch (LdapException ex) when (ex.ErrorCode == 49)
+            catch (LdapException e)
             {
-                logger.LogWarning("LDAPS service bind denied; check service-account provisioning.");
-                return DirectoryAuthenticationResult.Unavailable;
-            }
-            catch (LdapException ex)
-            {
-                // Retry the DR server on transport/service failure only.
-                logger.LogWarning("LDAPS endpoint unavailable (LDAP error {Code}).", ex.ErrorCode);
+                logger.LogWarning("Corporate directory endpoint failed (LDAP code {Code}).", e.ErrorCode);
             }
             catch (DirectoryOperationException)
             {
-                logger.LogWarning("LDAPS directory search failed; refusing authentication.");
-                return DirectoryAuthenticationResult.Unavailable;
+                logger.LogWarning("Corporate directory search failed.");
+                return new(DirectoryAuthenticationStatus.Unavailable);
             }
         }
-
-        return DirectoryAuthenticationResult.Unavailable;
+        return new(DirectoryAuthenticationStatus.Unavailable);
     }
 
-    private LdapConnection Connect(string host, string username, string password)
+    private DirectoryAuthorizationStatus CheckHrAccess(string personNumber)
     {
-        var endpoint = new LdapDirectoryIdentifier(host, _options.Port);
-        var connection = new LdapConnection(endpoint,
-            new NetworkCredential(username, password), AuthType.Basic)
+        foreach (var host in Hosts())
+        {
+            try
+            {
+                using var service = Connect(host);
+                service.Bind();
+                var entry = SearchEmployee(service, personNumber);
+                return entry is not null && IsHr(entry)
+                    ? DirectoryAuthorizationStatus.Authorized
+                    : DirectoryAuthorizationStatus.Denied;
+            }
+            catch (LdapException e) when (e.ErrorCode == 49)
+            {
+                logger.LogWarning("Corporate directory service bind rejected during HR revalidation.");
+                return DirectoryAuthorizationStatus.Unavailable;
+            }
+            catch (LdapException e)
+            {
+                logger.LogWarning("Corporate directory unavailable for HR revalidation (LDAP {Code}).", e.ErrorCode);
+            }
+            catch (DirectoryOperationException)
+            {
+                return DirectoryAuthorizationStatus.Unavailable;
+            }
+        }
+        return DirectoryAuthorizationStatus.Unavailable;
+    }
+
+    private SearchResultEntry? SearchEmployee(LdapConnection connection, string number)
+    {
+        var original = EscapeFilter(number.Trim());
+        var canonical = EscapeFilter(PersonNumber.Normalize(number));
+        var attr = _options.EmployeeNumberAttribute;
+        var filter = original == canonical
+            ? $"({attr}={original})"
+            : $"(|({attr}={original})({attr}={canonical}))";
+
+        var attributes = new[]
+        {
+            attr, _options.HrDepartmentAttribute, "memberOf",
+            "givenName", "sn", "displayName", "mail"
+        }.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+
+        var request = new SearchRequest(_options.UserSearchBase, filter,
+            SearchScope.Subtree, attributes)
+        {
+            SizeLimit = 2, TimeLimit = TimeSpan.FromSeconds(8)
+        };
+
+        var response = (SearchResponse)connection.SendRequest(request);
+        if (response.Entries.Count != 1)
+            return null;
+
+        return response.Entries[0];
+    }
+
+    private bool IsHr(SearchResultEntry entry)
+    {
+        // If IT supplies an explicit HR group DN, require direct group membership.
+        if (!string.IsNullOrWhiteSpace(_options.HrGroupDn))
+        {
+            if (!entry.Attributes.Contains("memberOf")) return false;
+            return entry.Attributes["memberOf"]!
+                .GetValues(typeof(string)).Cast<string>()
+                .Any(dn => string.Equals(dn.Trim(), _options.HrGroupDn.Trim(),
+                    StringComparison.OrdinalIgnoreCase));
+        }
+
+        // Otherwise use the authoritative LDAP department attribute, never the
+        // Excel roster's subdivision or a hard-coded employee-number allowlist.
+        var department = Attribute(entry, _options.HrDepartmentAttribute);
+        return string.Equals(department?.Trim(), _options.HrDepartmentValue.Trim(),
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string? Attribute(SearchResultEntry entry, string name)
+    {
+        if (!entry.Attributes.Contains(name)) return null;
+        var values = entry.Attributes[name]!.GetValues(typeof(string));
+        return values.Length > 0 ? values.GetValue(0)?.ToString() : null;
+    }
+
+    private IEnumerable<string> Hosts() =>
+        new[] { _options.PrimaryHost, _options.DisasterRecoveryHost }
+            .Where(host => !string.IsNullOrWhiteSpace(host))
+            .Select(host => host!)
+            .Distinct(StringComparer.OrdinalIgnoreCase);
+
+    private LdapConnection Connect(string host, string? username = null, string? password = null)
+    {
+        var connection = new LdapConnection(
+            new LdapDirectoryIdentifier(host, _options.Port),
+            new NetworkCredential(username ?? _options.BindUsername, password ?? _options.BindPassword),
+            AuthType.Basic)
         {
             Timeout = TimeSpan.FromSeconds(10)
         };
         connection.SessionOptions.ProtocolVersion = 3;
         connection.SessionOptions.SecureSocketLayer = true;
-        // Never bypass TLS certificate/hostname validation or fall back to plaintext LDAP.
+        // Do not disable certificate validation or fall back to plaintext LDAP.
         return connection;
     }
 
