@@ -4,7 +4,7 @@
 Reviewed the direct NuGet dependencies in `MtnAttendance.csproj`, updated supported stable packages, configured NuGet Audit to include **direct and transitive** dependencies, and added an automated runtime Docker image vulnerability scan. This is a dependency/vulnerability review, **not** a penetration test, an LDAP integration test, or a guarantee of zero vulnerabilities.
 
 ## Native Linux LDAPS dependency
-The Dockerfile installs the Debian `libgssapi-krb5-2` package alongside `libldap2` and trusted CA certificates. The CI workflow now builds the image and verifies that `libgssapi_krb5.so.2` exists inside the **runtime image**, which is stronger evidence than merely compiling the project. Rebuild the image in Komodo; restarting an older image does not add the library.
+The security-reviewed runtime now uses Microsoft's supported .NET 10 Alpine image. It installs Alpine's `krb5-libs`, `libldap`, `icu-libs` and `ca-certificates` packages. CI verifies that `libgssapi_krb5.so.2` exists **inside the final runtime image** and runs an isolated .NET LDAP native-loading smoke test. Rebuild the image in Komodo; restarting an older container does not add dependencies.
 
 ## Package upgrades
 | NuGet package | Prior | Updated |
@@ -26,6 +26,11 @@ The package upgrades are intended to reduce unpatched dependency exposure, not t
 - CI lists known vulnerable packages including transitive dependencies.
 - CI builds a freshly pulled .NET 10 image and scans OS and application library dependencies using Trivy. Findings at any reported severity (including low and moderate) now fail the CI job. Check the job logs for the detected vulnerabilities and tool/database versions.
 - Dependabot monitors NuGet, Docker and GitHub Actions dependencies weekly (once its configuration is merged to the default branch).
+
+## Scan results and image choice
+- Ubuntu 24.04 baseline: Trivy reported **28 OS vulnerabilities (23 medium, 5 low)** on 2026-10-22; 0 .NET package findings. No fixed OS package versions were listed in that report.
+- Alpine 3.24.3 candidate: [CI experiment](https://github.com/henrijoelzeze/MtnAttendance/actions/runs/39811735636) reported **0 OS and 0 .NET package findings across all severities**, and the GSSAPI library existence check passed. The candidate Dockerfile was promoted to this branch for additional runtime LDAP probing and real directory integration tests.
+- Scanner results are point-in-time coverage of the scanned packages and advisory databases; unknown vulnerabilities and business-logic risks remain possible.
 
 ## Unresolved security risks and validation gaps
 1. **Credentials exposure:** The LDAP bind password appeared in a chat, and an earlier PostgreSQL password was in public Git history. Both must be rotated. Editing the latest tracked file does not erase Git history.
