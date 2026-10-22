@@ -120,7 +120,12 @@ var app = builder.Build();
 
 if (!app.Environment.IsDevelopment())
 {
-    app.UseExceptionHandler("/Error", createScopeForErrors: true);
+    app.UseExceptionHandler(handler => handler.Run(async http =>
+    {
+        http.Response.StatusCode = StatusCodes.Status500InternalServerError;
+        http.Response.ContentType = "text/plain; charset=utf-8";
+        await http.Response.WriteAsync("An unexpected error occurred. Contact IT support.");
+    }));
     app.UseHsts();
 }
 
