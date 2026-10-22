@@ -107,7 +107,7 @@ public class EmployeeImportService(IDbContextFactory<AppDbContext> factory, Time
         return cols;
     }
 
-    /// <summary>Une seule transaction : insertions/mises à jour, désactivations, puis journal d'import.</summary>
+    /// <summary>Employee headcount import only. Directory membership, not this file, controls HR logins.</summary>
     private async Task SynchronizeAsync(
         IXLWorksheet sheet,
         Dictionary<string, int> cols,
@@ -142,7 +142,6 @@ public class EmployeeImportService(IDbContextFactory<AppDbContext> factory, Time
 
             var employee = GetOrCreate(db, existing, parsed.Key, report);
             Apply(employee, parsed, now);
-            SyncHrAccess(employee, now, report);
         }
 
         // A partial or invalid roster must not silently revoke employee and HR access.
@@ -242,7 +241,7 @@ public class EmployeeImportService(IDbContextFactory<AppDbContext> factory, Time
         employee.LastSeenInImportAt = now;
     }
 
-    /// <summary>Absents du fichier => sortis de l'entreprise : désactivation + coupure d'accès RH.</summary>
+    /// <summary>Roster absence affects employee headcount only, never directory HR privileges.</summary>
     private static void DeactivateMissing(
         Dictionary<string, Employee> existing,
         HashSet<string> seen,
@@ -253,11 +252,6 @@ public class EmployeeImportService(IDbContextFactory<AppDbContext> factory, Time
             employee.IsActive = false;
             report.Deactivated++;
 
-            if (employee.HrAccount is { IsEnabled: true } account)
-            {
-                account.IsEnabled = false;
-                report.HrAccountsAutoDisabled++;
-            }
         }
     }
 
@@ -276,32 +270,7 @@ public class EmployeeImportService(IDbContextFactory<AppDbContext> factory, Time
             : string.Join('\n', report.Warnings).Truncate(4000)
     };
 
-    /// <summary>Recalcule l'accès back-office à chaque import, dans les deux sens.</summary>
-    private static void SyncHrAccess(Employee employee, DateTime now, ImportReport report)
-    {
-        var isHr = string.Equals(employee.Subdivision.Trim(), HrAccount.HrSubdivision,
-            StringComparison.OrdinalIgnoreCase);
 
-        if (isHr)
-        {
-            if (employee.HrAccount is null)
-            {
-                // Rattaché à l'employé suivi : EF détecte le nouvel HrAccount au SaveChanges.
-                employee.HrAccount = new HrAccount { CreatedAt = now, IsEnabled = true };
-                report.HrAccountsCreated++;
-            }
-            else if (!employee.HrAccount.IsEnabled)
-            {
-                // Retour dans la subdivision RH : on réactive sans toucher au mot de passe.
-                employee.HrAccount.IsEnabled = true;
-            }
-        }
-        else if (employee.HrAccount is { IsEnabled: true } account)
-        {
-            account.IsEnabled = false;
-            report.HrAccountsAutoDisabled++;
-        }
-    }
 }
 
 internal static class StringExtensions
