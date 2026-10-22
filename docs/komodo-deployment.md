@@ -4,7 +4,7 @@ Use Komodo **Stack** with this repository, branch `feature/hr-ldaps-authenticati
 
 ## Required secure Komodo variables
 
-Set `POSTGRES_CONNECTION_STRING`, `LDAPS_PRIMARY_HOST`, `LDAPS_DR_HOST`, `LDAPS_USER_BASE`, `LDAPS_BIND_USERNAME`, `LDAPS_BIND_PASSWORD`, and `TRUSTED_PROXY_IP`. Optional: `LDAPS_PORT`, `LDAPS_GROUP_BASE`, `LDAPS_EMPLOYEE_NUMBER_ATTRIBUTE`, `ATTENDANCE_PORT`.
+Set `POSTGRES_CONNECTION_STRING`, `LDAPS_PRIMARY_HOST`, `LDAPS_DR_HOST`, `LDAPS_USER_BASE`, `LDAPS_BIND_USERNAME`, `LDAPS_BIND_PASSWORD`, and `TRUSTED_PROXY_IP`. Optional: `LDAPS_PORT`, `LDAPS_GROUP_BASE`, `LDAPS_EMPLOYEE_NUMBER_ATTRIBUTE`, `LDAPS_HR_GROUP_DN`, `LDAPS_HR_DEPARTMENT_ATTRIBUTE`, `LDAPS_HR_DEPARTMENT_VALUE`, `ATTENDANCE_PORT`.
 
 Do not use credentials leaked in chat or Git history; rotate first. Komodo and Docker may expose environment variables to Docker administrators; use approved secrets management if that does not meet your requirements. Keep Komodo's variable values outside version control.
 
